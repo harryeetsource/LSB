@@ -24,7 +24,7 @@ fn embed_data_in_image(image: &DynamicImage, data: &[u8]) -> Result<DynamicImage
     let mut img = image.to_rgba8();
     let (width, height) = img.dimensions();
     let total_bits_needed = (data.len() + 4) * 8; // 8 bits per byte + 4 bytes for length metadata
-    let total_pixels_needed = total_bits_needed; // 1 bit per pixel
+    let total_pixels_needed = (total_bits_needed + 3) / 4; // 4 bits per color channel, 2 channels per pixel
 
     if (width as usize) * (height as usize) < total_pixels_needed {
         return Err(format!(
@@ -47,13 +47,20 @@ fn embed_data_in_image(image: &DynamicImage, data: &[u8]) -> Result<DynamicImage
 
     // Process combined data bits
     for byte in combined_data.iter() {
-        for bit in 0..8 {
+        for bit in (0..8).rev() {
             let pixel_index = bit_index / 4;
-            let color_channel = (bit_index % 4) as usize; // 0: R, 1: G, 2: B, 3: A
+            let channel_offset = bit_index % 4; // Use 4 bits per channel, across two color channels per pixel
             let current_pixel = img.get_pixel_mut((pixel_index % width) as u32, (pixel_index / width) as u32);
-            let mask = 1 << (7 - bit);
-            let data_bit = (byte & mask) >> (7 - bit);
-            current_pixel.0[color_channel] = (current_pixel.0[color_channel] & !1) | data_bit;
+
+            let data_bit = (byte >> bit) & 1;
+            let channel = match channel_offset {
+                0 => 0, // Red channel
+                1 => 1, // Green channel
+                2 => 2, // Blue channel
+                _ => 3, // Alpha channel (not typically used, but available)
+            };
+
+            current_pixel.0[channel] = (current_pixel.0[channel] & 0xFE) | data_bit;
             bit_index += 1;
         }
     }
@@ -73,9 +80,17 @@ fn extract_data_from_image(image: &DynamicImage) -> Result<Vec<u8>, String> {
     // Extract the length (first 4 bytes)
     for i in 0..32 {
         let pixel_index = bit_index / 4;
-        let color_channel = bit_index % 4; // 0: R, 1: G, 2: B, 3: A
+        let channel_offset = bit_index % 4;
         let pixel = img.get_pixel((pixel_index % width) as u32, (pixel_index / width) as u32);
-        length_bits[i] = (pixel.0[color_channel as usize] & 1) as u8;
+
+        let channel = match channel_offset {
+            0 => 0, // Red channel
+            1 => 1, // Green channel
+            2 => 2, // Blue channel
+            _ => 3, // Alpha channel
+        };
+
+        length_bits[i] = (pixel.0[channel] & 1) as u8;
         bit_index += 1;
     }
 
@@ -87,7 +102,7 @@ fn extract_data_from_image(image: &DynamicImage) -> Result<Vec<u8>, String> {
 
     let total_bits_needed = (data_length as usize) * 8; // 8 bits per byte
 
-    if (bit_index as usize) + total_bits_needed > (width as usize) * (height as usize) {
+    if (bit_index as usize) + total_bits_needed > (width as usize) * (height as usize) * 4 {
         return Err("Image is too small to contain the requested data".to_string());
     }
 
@@ -96,9 +111,17 @@ fn extract_data_from_image(image: &DynamicImage) -> Result<Vec<u8>, String> {
     // Extract bits for the data
     for i in 0..total_bits_needed {
         let pixel_index = bit_index / 4;
-        let color_channel = bit_index % 4; // 0: R, 1: G, 2: B, 3: A
+        let channel_offset = bit_index % 4;
         let pixel = img.get_pixel((pixel_index % width) as u32, (pixel_index / width) as u32);
-        data_bits[i] = (pixel.0[color_channel as usize] & 1) as u8;
+
+        let channel = match channel_offset {
+            0 => 0, // Red channel
+            1 => 1, // Green channel
+            2 => 2, // Blue channel
+            _ => 3, // Alpha channel
+        };
+
+        data_bits[i] = (pixel.0[channel] & 1) as u8;
         bit_index += 1;
     }
 
